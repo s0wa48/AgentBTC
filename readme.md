@@ -22,8 +22,8 @@ Automatyczny system tradingowy dla Bitcoin oparty na modelu LSTM, analizie techn
 
 1. Sklonuj repozytorium:
 ```
-git clone https://github.com/yourusername/bitcoin_trading_bot.git
-cd bitcoin_trading_bot
+git clone https://github.com/s0wa48/AgentBTC.git
+cd AgentBTC
 ```
 
 2. Zainstaluj zależności:
