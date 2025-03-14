@@ -12,6 +12,7 @@ from datetime import datetime
 
 import config
 from analyzer import MarketAnalyzer
+from historical_sentiment import HistoricalSentimentAnalyzer
 
 logger = logging.getLogger("backtest")
 
@@ -31,10 +32,12 @@ def parse_arguments():
                         help='Generowanie wykresu wyników')
     parser.add_argument('--output', type=str,
                         help='Ścieżka wyjściowa dla wyników')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Wyświetlanie szczegółowych logów')
     
     return parser.parse_args()
 
-def run_backtest(analyzer=None, start_date=None, end_date=None, initial_balance=10000):
+def run_backtest(analyzer=None, start_date=None, end_date=None, initial_balance=10000, verbose=False):
     """
     Przeprowadzenie backtestingu strategii.
     
@@ -43,6 +46,7 @@ def run_backtest(analyzer=None, start_date=None, end_date=None, initial_balance=
         start_date (str): Data początkowa w formacie 'YYYY-MM-DD'
         end_date (str): Data końcowa w formacie 'YYYY-MM-DD'
         initial_balance (float): Początkowy kapitał
+        verbose (bool): Czy wyświetlać szczegółowe logi
         
     Returns:
         dict: Wyniki backtestingu
@@ -55,6 +59,10 @@ def run_backtest(analyzer=None, start_date=None, end_date=None, initial_balance=
     
     if end_date is None:
         end_date = config.BACKTEST['end_date']
+    
+    # Inicjalizacja analizatora historycznego sentymentu
+    historical_sentiment_analyzer = HistoricalSentimentAnalyzer()
+    logger.info("Zainicjalizowano analizator historycznego sentymentu")
     
     # Wczytanie modelu
     if not analyzer.load_model():
@@ -107,37 +115,74 @@ def run_backtest(analyzer=None, start_date=None, end_date=None, initial_balance=
         # 2. Analiza techniczna
         ta_signal = analyzer.generate_ta_signal(df_subset)
         
-        # 3. Prosty sentyment (losowy dla backtestingu)
-        sentiment = np.random.uniform(-0.3, 0.3)
+        # 3. Użycie historycznego sentymentu zamiast losowego
+        current_timestamp = df['timestamp'].iloc[i]
+        current_date = datetime.fromtimestamp(current_timestamp.timestamp())
+        sentiment = historical_sentiment_analyzer.get_integrated_historical_sentiment(current_date)
+        
+        # Dodatkowe logi dla sentymentu - NOWE!
+        if verbose:
+            fear_greed = historical_sentiment_analyzer.get_historical_fear_greed(current_date)
+            funding_rate = historical_sentiment_analyzer._get_funding_rate_for_date(current_date)
+            long_short_ratio = historical_sentiment_analyzer._get_long_short_ratio_for_date(current_date)
+            exchange_flows = historical_sentiment_analyzer._get_exchange_flows_for_date(current_date)
+            
+            logger.info(f"-------- Sentyment dla {current_date.strftime('%Y-%m-%d')} --------")
+            logger.info(f"Fear & Greed: {fear_greed:.4f}")
+            logger.info(f"Funding Rate: {funding_rate:.4f}")
+            logger.info(f"Long/Short Ratio: {long_short_ratio:.4f}")
+            logger.info(f"Exchange Flows: {exchange_flows:.4f}")
+            logger.info(f"Zintegrowany sentyment: {sentiment:.4f}")
+        else:
+            logger.info(f"Historyczny sentyment dla {current_date.strftime('%Y-%m-%d')}: {sentiment:.4f}")
         
         # 4. Połączenie sygnałów w jeden
         signal_value = 0
         
         # Składowa z modelu LSTM
+        model_component = 0
         if prediction:
             model_direction = prediction.get('direction', 'FLAT')
             model_confidence = abs(prediction.get('percent_change', 0))
             
             if model_direction == "UP":
-                signal_value += config.SIGNALS["model_weight"] * min(model_confidence / 5, 1.0)
+                model_component = config.SIGNALS["model_weight"] * min(model_confidence / 5, 1.0)
+                signal_value += model_component
             elif model_direction == "DOWN":
-                signal_value -= config.SIGNALS["model_weight"] * min(model_confidence / 5, 1.0)
+                model_component = -config.SIGNALS["model_weight"] * min(model_confidence / 5, 1.0)
+                signal_value += model_component
         
         # Składowa z analizy technicznej
+        ta_component = 0
         if ta_signal == "LONG":
-            signal_value += config.SIGNALS["tech_analysis_weight"]
+            ta_component = config.SIGNALS["tech_analysis_weight"]
+            signal_value += ta_component
         elif ta_signal == "SHORT":
-            signal_value -= config.SIGNALS["tech_analysis_weight"]
+            ta_component = -config.SIGNALS["tech_analysis_weight"]
+            signal_value += ta_component
         
         # Składowa z sentymentu rynkowego
-        signal_value += config.SIGNALS["sentiment_weight"] * sentiment
+        sentiment_component = config.SIGNALS["sentiment_weight"] * sentiment
+        signal_value += sentiment_component
         
         # Uwzględnienie aktualnej pozycji (inercja)
         inertia_factor = 0.1
+        inertia_component = 0
         if position == "LONG":
-            signal_value += inertia_factor
+            inertia_component = inertia_factor
+            signal_value += inertia_component
         elif position == "SHORT":
-            signal_value -= inertia_factor
+            inertia_component = -inertia_factor
+            signal_value += inertia_component
+        
+        # Dodatkowe logi dla składowych sygnału - NOWE!
+        if verbose:
+            logger.info(f"------ Składowe sygnału ------")
+            logger.info(f"Model LSTM: {model_component:.4f}")
+            logger.info(f"Analiza techniczna: {ta_component:.4f}")
+            logger.info(f"Sentyment: {sentiment_component:.4f}")
+            logger.info(f"Inercja: {inertia_component:.4f}")
+            logger.info(f"Całkowita wartość sygnału: {signal_value:.4f}")
         
         # Generowanie finalnego sygnału
         if signal_value > config.SIGNALS["long_threshold"]:
@@ -146,6 +191,9 @@ def run_backtest(analyzer=None, start_date=None, end_date=None, initial_balance=
             signal = "SHORT"
         else:
             signal = "FLAT"
+        
+        if verbose:
+            logger.info(f"Finalny sygnał: {signal}")
         
         # Aktualna cena i następna cena (do oceny skuteczności)
         current_price = df['close'].iloc[i]
@@ -496,7 +544,8 @@ def main():
         analyzer=analyzer,
         start_date=args.start_date,
         end_date=args.end_date,
-        initial_balance=args.initial_balance
+        initial_balance=args.initial_balance,
+        verbose=args.verbose
     )
     
     if backtest_results is None:

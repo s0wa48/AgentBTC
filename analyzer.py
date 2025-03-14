@@ -15,6 +15,7 @@ import requests
 import random
 from datetime import datetime
 import ta
+import time
 
 import config
 
@@ -100,6 +101,195 @@ class MarketAnalyzer:
         except Exception as e:
             logger.error(f"Błąd podczas pobierania danych: {e}")
             return pd.DataFrame()
+    
+    def fetch_historical_data(self, symbol=None, timeframe=None, start_date=None, end_date=None, save_path=None):
+        """
+        Pobieranie danych historycznych z giełdy z implementacją paginacji dla dłuższych zakresów czasowych.
+        
+        Args:
+            symbol (str): Symbol instrumentu (np. BTC/USDT)
+            timeframe (str): Interwał czasowy (np. 1h, 4h, 1d)
+            start_date (str): Data początkowa w formacie 'YYYY-MM-DD'
+            end_date (str): Data końcowa w formacie 'YYYY-MM-DD'
+            save_path (str): Ścieżka do zapisu danych w formacie CSV (opcjonalnie)
+            
+        Returns:
+            DataFrame: DataFrame z danymi historycznymi
+        """
+        try:
+            if symbol is None:
+                symbol = config.SYMBOL
+            if timeframe is None:
+                timeframe = config.TIMEFRAME
+            
+            # Konwersja dat na timestamp (ms)
+            if start_date:
+                start_ts = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp() * 1000)
+            else:
+                start_ts = None
+                
+            if end_date:
+                end_ts = int(datetime.strptime(end_date, '%Y-%m-%d').timestamp() * 1000)
+            else:
+                end_ts = int(datetime.now().timestamp() * 1000)
+            
+            logger.info(f"Pobieranie danych historycznych dla {symbol} na interwale {timeframe} "
+                       f"od {start_date if start_date else 'początku'} "
+                       f"do {end_date if end_date else 'teraz'}")
+            
+            # Sprawdzenie czy plik z danymi już istnieje
+            if save_path and os.path.exists(save_path):
+                logger.info(f"Znaleziono istniejący plik z danymi: {save_path}")
+                df = pd.read_csv(save_path)
+                
+                # Sprawdzenie czy plik zawiera wszystkie potrzebne dane
+                if 'timestamp' in df.columns:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    min_date = df['timestamp'].min()
+                    max_date = df['timestamp'].max()
+                    
+                    logger.info(f"Zakres dat w pliku: od {min_date} do {max_date}")
+                    
+                    # Jeśli plik zawiera wymagany zakres dat, zwracamy go
+                    if ((not start_date or min_date <= pd.to_datetime(start_date)) and 
+                        (not end_date or max_date >= pd.to_datetime(end_date))):
+                        logger.info("Plik zawiera wszystkie potrzebne dane. Używam istniejących danych.")
+                        
+                        # Filtracja według żądanego zakresu
+                        if start_date:
+                            df = df[df['timestamp'] >= pd.to_datetime(start_date)]
+                        if end_date:
+                            df = df[df['timestamp'] <= pd.to_datetime(end_date)]
+                        
+                        # Dodanie wskaźników technicznych
+                        df = self.add_technical_indicators(df)
+                        
+                        return df
+            
+            # Inicjalizacja połączenia z giełdą, jeśli nie jest jeszcze ustanowione
+            if self.exchange is None:
+                self.exchange = self._initialize_exchange()
+                
+            if self.exchange is None:
+                raise Exception("Brak połączenia z giełdą")
+            
+            # Maksymalna liczba świec na jedno zapytanie
+            max_limit = 1000
+            
+            # Lista do przechowywania wszystkich pobranych danych
+            all_candles = []
+            
+            # Początkowy timestamp dla paginacji
+            current_ts = start_ts
+            
+            # Pętla paginacji - pobieramy dane w porcjach
+            while True:
+                # Jeśli dotarliśmy do końca zakresu, kończymy
+                if current_ts and end_ts and current_ts >= end_ts:
+                    break
+                    
+                try:
+                    # Określenie końcowego timestamp dla tego zapytania
+                    temp_end_ts = None
+                    if end_ts:
+                        temp_end_ts = min(end_ts, current_ts + (max_limit * self._get_timeframe_ms(timeframe)))
+                    
+                    logger.info(f"Pobieranie porcji danych od {datetime.fromtimestamp(current_ts/1000).strftime('%Y-%m-%d %H:%M') if current_ts else 'początku'} "
+                               f"do {datetime.fromtimestamp(temp_end_ts/1000).strftime('%Y-%m-%d %H:%M') if temp_end_ts else 'teraz'}")
+                    
+                    # Pobieranie porcji danych
+                    candles = self.exchange.fetch_ohlcv(
+                        symbol, 
+                        timeframe, 
+                        limit=max_limit,
+                        since=current_ts
+                    )
+                    
+                    if not candles:
+                        logger.info("Brak dalszych danych do pobrania.")
+                        break
+                        
+                    logger.info(f"Pobrano {len(candles)} świec.")
+                    all_candles.extend(candles)
+                    
+                    # Przygotowanie do następnej iteracji - pobieramy timestamp ostatniej świecy + 1ms
+                    if candles:
+                        last_candle_ts = candles[-1][0]
+                        current_ts = last_candle_ts + 1
+                    else:
+                        break
+                        
+                    # Sprawdzenie czy dotarliśmy do końca zakresu
+                    if end_ts and current_ts >= end_ts:
+                        break
+                        
+                    # Dodanie opóźnienia między zapytaniami, aby nie przekroczyć limitów API
+                    time.sleep(0.5)  # 500ms opóźnienia
+                    
+                except Exception as e:
+                    logger.error(f"Błąd podczas pobierania porcji danych: {e}")
+                    # Próbujemy kontynuować mimo błędu
+                    time.sleep(2)  # Dłuższe opóźnienie po błędzie
+                    continue
+            
+            # Konwersja wszystkich pobranych danych do DataFrame
+            if not all_candles:
+                logger.warning("Nie pobrano żadnych danych.")
+                return pd.DataFrame()
+                
+            df = pd.DataFrame(all_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            
+            # Usunięcie ewentualnych duplikatów (może się zdarzyć przy paginacji)
+            df = df.drop_duplicates(subset=['timestamp'])
+            
+            # Sortowanie według timestampu
+            df = df.sort_values('timestamp')
+            
+            # Filtracja według żądanego zakresu (na wszelki wypadek)
+            if start_date:
+                df = df[df['timestamp'] >= pd.to_datetime(start_date)]
+            if end_date:
+                df = df[df['timestamp'] <= pd.to_datetime(end_date)]
+            
+            # Zapisanie danych do pliku CSV, jeśli podano ścieżkę
+            if save_path:
+                os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+                df.to_csv(save_path, index=False)
+                logger.info(f"Zapisano dane do pliku: {save_path}")
+            
+            # Dodanie wskaźników technicznych
+            df = self.add_technical_indicators(df)
+            
+            logger.info(f"Zakończono pobieranie danych. Łącznie pozyskano {len(df)} świec.")
+            return df
+            
+        except Exception as e:
+            logger.error(f"Błąd podczas pobierania danych historycznych: {e}")
+            return pd.DataFrame()
+            
+    def _get_timeframe_ms(self, timeframe):
+        """
+        Konwersja interwału czasowego na milisekundy.
+        
+        Args:
+            timeframe (str): Interwał w formacie np. '1h', '4h', '1d'
+            
+        Returns:
+            int: Liczba milisekund odpowiadająca interwałowi
+        """
+        # Parsowanie wartości i jednostki
+        if timeframe.endswith('m'):
+            return int(timeframe[:-1]) * 60 * 1000
+        elif timeframe.endswith('h'):
+            return int(timeframe[:-1]) * 60 * 60 * 1000
+        elif timeframe.endswith('d'):
+            return int(timeframe[:-1]) * 24 * 60 * 60 * 1000
+        elif timeframe.endswith('w'):
+            return int(timeframe[:-1]) * 7 * 24 * 60 * 60 * 1000
+        else:
+            # Domyślnie zakładamy minuty
+            return int(timeframe) * 60 * 1000
     
     def add_technical_indicators(self, df):
         """

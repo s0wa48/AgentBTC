@@ -39,6 +39,8 @@ def parse_arguments():
                         help='Wymuś trening, nawet jeśli istnieje wcześniej wytrenowany model')
     parser.add_argument('--model_name', type=str, default=None,
                         help='Niestandardowa nazwa dla zapisywanego modelu')
+    parser.add_argument('--use_cached_data', action='store_true',
+                        help='Użyj zapisanych wcześniej danych, jeśli są dostępne')
     
     return parser.parse_args()
 
@@ -127,26 +129,42 @@ def train_model():
     # Inicjalizacja analizatora danych
     analyzer = MarketAnalyzer()
     
+    # Określenie ścieżki dla zapisanych danych
+    cached_data_path = os.path.join(
+        config.DATA_DIR, 
+        f"historical_{config.SYMBOL.replace('/', '_')}_{config.TIMEFRAME}_{args.start_date}_{args.end_date}.csv"
+    )
+    
     # Pobieranie danych historycznych
     print(f"Pobieranie danych historycznych od {args.start_date} do {args.end_date}...")
-    df = analyzer.fetch_market_data(
-        timeframe=config.TIMEFRAME,
-        limit=10000  # Maksymalna liczba świec
-    )
+    
+    # Użycie nowej metody fetch_historical_data
+    if hasattr(analyzer, 'fetch_historical_data'):
+        df = analyzer.fetch_historical_data(
+            symbol=config.SYMBOL,
+            timeframe=config.TIMEFRAME,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            save_path=cached_data_path if args.use_cached_data else None
+        )
+    else:
+        # Zachowanie kompatybilności wstecznej
+        print("Uwaga: Używam starej metody pobierania danych. Zalecana aktualizacja modułu analyzer.py.")
+        df = analyzer.fetch_market_data(
+            timeframe=config.TIMEFRAME,
+            limit=10000  # Maksymalna liczba świec
+        )
     
     if df.empty:
         print("Błąd: Nie udało się pobrać danych historycznych")
         return False
     
-    print(f"Pobrano {len(df)} świec danych historycznych")
-    
-    # Pominięcie problematycznej filtracji dat i użycie wszystkich dostępnych danych
-    # Większość giełd i tak zwraca dane tylko za ograniczony okres czasu
-    # Zamiast filtrować, wydrukujmy jaki zakres dat faktycznie mamy
+    # Wyświetlanie informacji o zakresie dat
     if 'timestamp' in df.columns:
         min_date = df['timestamp'].min().strftime('%Y-%m-%d')
         max_date = df['timestamp'].max().strftime('%Y-%m-%d')
-        print(f"Zakres dat w pobranych danych: od {min_date} do {max_date}")
+        print(f"Pobrano dane w zakresie dat od {min_date} do {max_date}")
+        print(f"Łącznie pobrano {len(df)} świec danych")
     
     if len(df) < 100:  # Minimalna liczba punktów potrzebna do treningu
         print(f"Za mało danych do treningu: znaleziono tylko {len(df)} punktów")
@@ -190,14 +208,9 @@ def train_model():
     if args.model_name:
         model_filepath = os.path.join(config.MODELS_DIR, f'{args.model_name}.h5')
     else:
-        # Użyj faktycznego zakresu dat z danych
-        if 'timestamp' in df.columns:
-            start_date_str = min_date.replace('-', '')
-            end_date_str = max_date.replace('-', '')
-        else:
-            start_date_str = datetime.now().strftime('%Y%m%d')
-            end_date_str = datetime.now().strftime('%Y%m%d')
-            
+        # Dodaj informacje o zakresie dat do nazwy pliku
+        start_date_str = min_date.replace('-', '')
+        end_date_str = max_date.replace('-', '')
         model_filepath = os.path.join(config.MODELS_DIR, f'lstm_model_{start_date_str}_to_{end_date_str}_{timestamp}.h5')
     
     model_checkpoint = ModelCheckpoint(
@@ -236,8 +249,8 @@ def train_model():
     
     # Zapisywanie informacji o parametrach treningu
     training_info = {
-        'actual_start_date': min_date if 'timestamp' in df.columns else None,
-        'actual_end_date': max_date if 'timestamp' in df.columns else None,
+        'actual_start_date': min_date,
+        'actual_end_date': max_date,
         'requested_start_date': args.start_date,
         'requested_end_date': args.end_date,
         'epochs': args.epochs,
@@ -270,8 +283,10 @@ def train_model():
     # Zapis najważniejszych parametrów modelu i wyników do pliku CSV
     results_summary = {
         'model_name': os.path.basename(model_filepath),
-        'actual_start_date': min_date if 'timestamp' in df.columns else None,
-        'actual_end_date': max_date if 'timestamp' in df.columns else None,
+        'actual_start_date': min_date,
+        'actual_end_date': max_date,
+        'requested_start_date': args.start_date,
+        'requested_end_date': args.end_date,
         'data_points': len(df),
         'training_samples': len(X_train),
         'validation_loss': val_loss,
@@ -289,7 +304,7 @@ def train_model():
     print(f"Podsumowanie wyników zapisane w: {results_csv}")
     
     print("\nModel może być teraz testowany za pomocą skryptu backtest.py")
-    print(f"Przykład: python backtest.py --model {model_filepath} --start_date 2023-01-01 --end_date 2023-12-31")
+    print(f"Przykład: python backtest.py --model {model_filepath} --start_date {min_date} --end_date {max_date}")
     
     return True
 
