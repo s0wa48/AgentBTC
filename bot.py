@@ -13,6 +13,7 @@ import time
 import config
 import analyzer
 import trader
+from sentiment_analyzer import SentimentAnalyzer  # Import nowego analizatora sentymentu
 
 logger = logging.getLogger("bot")
 
@@ -26,6 +27,7 @@ class BitcoinTradingBot:
         logger.info("Inicjalizacja Bitcoin Trading Bot")
         self.analyzer = analyzer.MarketAnalyzer()
         self.trader = trader.Trader()
+        self.sentiment_analyzer = SentimentAnalyzer()  # Inicjalizacja rozszerzonego analizatora sentymentu
         self.current_position = "FLAT"  # FLAT, LONG, SHORT
         self.entry_price = 0
         self.position_size = 0
@@ -47,8 +49,23 @@ class BitcoinTradingBot:
         # 2. Analiza techniczna
         ta_signal = self.analyzer.generate_ta_signal(df)
         
-        # 3. Analiza sentymentu (opcjonalnie)
-        sentiment = self.analyzer.analyze_market_sentiment()
+        # 3. Rozszerzona analiza sentymentu z nowej klasy SentimentAnalyzer
+        sentiment = self.sentiment_analyzer.get_integrated_sentiment()
+        
+        # Zbieranie szczegółowych danych sentymentu do logowania
+        sentiment_details = {
+            "fear_greed": self.sentiment_analyzer.get_fear_greed_index(),
+            "funding_rate": self.sentiment_analyzer.get_funding_rate(),
+            "long_short_ratio": self.sentiment_analyzer.get_long_short_ratio(),
+            "exchange_flows": self.sentiment_analyzer.get_exchange_flows()
+        }
+        
+        # Logowanie szczegółowych danych sentymentu
+        logger.info(f"Szczegóły sentymentu: Fear&Greed={sentiment_details['fear_greed']:.2f}, "
+                   f"Funding={sentiment_details['funding_rate']:.2f}, "
+                   f"L/S Ratio={sentiment_details['long_short_ratio']:.2f}, "
+                   f"Flows={sentiment_details['exchange_flows']:.2f}, "
+                   f"Integrated={sentiment:.2f}")
         
         # 4. Połączenie sygnałów w jeden
         final_signal = self._combine_signals(prediction, ta_signal, sentiment)
@@ -57,7 +74,8 @@ class BitcoinTradingBot:
             "signal": final_signal,
             "prediction": prediction,
             "ta_signal": ta_signal,
-            "sentiment": sentiment
+            "sentiment": sentiment,
+            "sentiment_details": sentiment_details  # Dodajemy szczegóły sentymentu do wyników
         }
     
     def _combine_signals(self, prediction, ta_signal, sentiment):
@@ -80,7 +98,7 @@ class BitcoinTradingBot:
         elif ta_signal == "SHORT":
             signal_value -= config.SIGNALS["tech_analysis_weight"]
         
-        # Składowa z sentymentu rynkowego
+        # Składowa z sentymentu rynkowego (rozszerzona wersja)
         signal_value += config.SIGNALS["sentiment_weight"] * sentiment
         
         # Uwzględnienie aktualnej pozycji (inercja)
@@ -158,7 +176,8 @@ class BitcoinTradingBot:
                 "success": True,
                 "signal": signal_data["signal"],
                 "prediction": signal_data["prediction"],
-                "trade_result": trade_result
+                "trade_result": trade_result,
+                "sentiment_details": signal_data.get("sentiment_details", {})  # Dodajemy szczegóły sentymentu
             }
             
         except Exception as e:
@@ -183,6 +202,17 @@ class BitcoinTradingBot:
                 "current_price": prediction.get("current_price", 0),
                 "predicted_price": prediction.get("predicted_price", 0),
                 "percent_change": prediction.get("percent_change", 0)
+            })
+        
+        # Dodanie szczegółów sentymentu do logów
+        if "sentiment_details" in signal_data:
+            sentiment = signal_data["sentiment_details"]
+            log_data.update({
+                "fear_greed_index": sentiment.get("fear_greed", 0),
+                "funding_rate": sentiment.get("funding_rate", 0),
+                "long_short_ratio": sentiment.get("long_short_ratio", 0),
+                "exchange_flows": sentiment.get("exchange_flows", 0),
+                "integrated_sentiment": signal_data.get("sentiment", 0)
             })
         
         # Zapisanie do CSV
@@ -214,6 +244,14 @@ class BitcoinTradingBot:
                 
                 if not result["success"]:
                     logger.error(f"Błąd w cyklu: {result.get('error', 'Nieznany błąd')}")
+                else:
+                    # Logowanie szczegółów sentymentu jeśli dostępne
+                    if "sentiment_details" in result:
+                        sentiment = result["sentiment_details"]
+                        logger.info(f"Szczegóły sentymentu: F&G={sentiment.get('fear_greed', 0):.2f}, "
+                                  f"Funding={sentiment.get('funding_rate', 0):.2f}, "
+                                  f"L/S={sentiment.get('long_short_ratio', 0):.2f}, "
+                                  f"Flows={sentiment.get('exchange_flows', 0):.2f}")
                 
                 logger.info(f"Cykl zakończony. Następny za {interval_minutes} minut")
                 

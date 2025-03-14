@@ -23,6 +23,8 @@ def parse_arguments():
                         help='Ścieżka do modelu (jeśli różna od domyślnej)')
     parser.add_argument('--demo', action='store_true',
                         help='Uruchomienie w trybie demo (bez rzeczywistych transakcji)')
+    parser.add_argument('--verbose-sentiment', action='store_true',
+                        help='Szczegółowe wyświetlanie informacji o sentymencie')
     
     return parser.parse_args()
 
@@ -111,6 +113,15 @@ def run_live_trading():
         if confirmation.upper() != "TAK":
             print("Anulowano uruchomienie.")
             return
+    
+    # Wyświetl informację o włączonym rozszerzonym sentymencie
+    if args.verbose_sentiment:
+        print("\nUruchomiono z rozszerzoną analizą sentymentu:")
+        print("- Fear & Greed Index")
+        print("- Funding Rate")
+        print("- Long/Short Ratio")
+        print("- Exchange Flows")
+        logger.info("Włączono szczegółowe logowanie sentymentu rynkowego")
     
     # Uruchomienie bota
     print(f"\nSystem tradingowy uruchomiony z interwałem {args.interval} minut.")
