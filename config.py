@@ -31,15 +31,15 @@ EXCHANGE = {
 }
 
 # Webhook do systemu transakcyjnego
-WEBHOOK_URL = "http://51.83.255.214:80/api/receive-signal"
+WEBHOOK_URL = ""
 
 # Konfiguracja powiadomień email
 EMAIL_NOTIFICATION = {
-    "sender_email": "msmaciejsowinski@gmail.com",  # Email nadawcy (wymaga konfiguracji)
-    "sender_password": "fgip iuls zpwm avzs",  # Hasło aplikacyjne (dla Gmail)
+    "sender_email": "",  # Email nadawcy (wymaga konfiguracji)
+    "sender_password": "",  # Hasło aplikacyjne (dla Gmail)
     "smtp_server": "smtp.gmail.com",  # Serwer SMTP
     "smtp_port": 587,  # Port SMTP
-    "recipient_email": "msmaciejsowinski@gmail.com",  # Email odbiorcy
+    "recipient_email": "",  # Email odbiorcy
     "send_on_position_change": True,  # Wysyłaj powiadomienia przy zmianie pozycji
 }
 
@@ -123,7 +123,7 @@ BACKTEST = {
 # Parametry tradingu na żywo
 LIVE_TRADING = {
     "check_interval_minutes": 5,  # Sprawdzaj co godzinę
-    "notification_email": "msmaciejsowinski@gmail.com"
+    "notification_email": ""
 }
 
 # Proste logowanie
